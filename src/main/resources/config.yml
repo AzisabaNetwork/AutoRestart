@@ -1,8 +1,18 @@
-# サーバーを再起動する時刻（24時間表記）
-restart-time: "04:00"
+#すべて24時間制
+# 再起動時刻（複数設定可能）
+restart-times:
+  - "04:00"
 
-# 通知タイミング（分単位）
-# ここに書いた分前に全体チャット通知されます
+# 何分前に通知するか
 notify-before:
   - 5
   - 1
+
+# 時刻指定コマンド実行
+scheduled-commands:
+  command1:
+    time: "03:30"
+    command: ""
+  command2:
+    time: "05:00"
+    command: ""

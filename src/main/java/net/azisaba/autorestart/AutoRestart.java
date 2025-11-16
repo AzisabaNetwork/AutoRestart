@@ -1,11 +1,11 @@
 package net.azisaba.autorestart;
 
 import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
-import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.scheduler.BukkitRunnable;
 
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
@@ -13,124 +13,140 @@ import java.util.*;
 
 public class AutoRestart extends JavaPlugin {
 
-    private LocalTime restartTime;
-    private List<Integer> notifyBeforeList;
-    private BukkitRunnable restartTask;
-    private BukkitRunnable countdownTask;
+    private List<LocalTime> restartTimes = new ArrayList<>();
+    private List<Integer> notifyMinutes = new ArrayList<>();
+    private Map<LocalTime, List<String>> scheduledCommands = new HashMap<>();
+    private Set<String> executedCommandsToday = new HashSet<>();
+    private boolean running = false;
 
     @Override
     public void onEnable() {
         saveDefaultConfig();
         loadSettings();
-        startRestartScheduler();
-        getLogger().info("AutoRestart が有効になりました。");
+        startScheduler();
+        getLogger().info("AutoRestart enabled.");
     }
 
     @Override
     public void onDisable() {
-        if (restartTask != null) restartTask.cancel();
-        if (countdownTask != null) countdownTask.cancel();
-        getLogger().info("AutoRestart が無効になりました。");
+        getLogger().info("AutoRestart disabled.");
     }
 
     private void loadSettings() {
         reloadConfig();
-        FileConfiguration config = getConfig();
+        restartTimes.clear();
+        notifyMinutes.clear();
+        scheduledCommands.clear();
 
-        // 再起動時刻（例: 04:00）
-        String timeString = config.getString("restart-time", "04:00");
-        restartTime = LocalTime.parse(timeString, DateTimeFormatter.ofPattern("HH:mm"));
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("HH:mm");
 
-        // 通知タイミング（分単位）
-        notifyBeforeList = config.getIntegerList("notify-before");
-        if (notifyBeforeList.isEmpty()) {
-            notifyBeforeList = Arrays.asList(5, 1); // デフォルト
+        // restart-times
+        for (String s : getConfig().getStringList("restart-times")) {
+            try {
+                restartTimes.add(LocalTime.parse(s, formatter));
+            } catch (Exception e) {
+                getLogger().warning("Invalid time format: " + s);
+            }
         }
 
-        getLogger().info("再起動予定時刻: " + restartTime);
-        getLogger().info("通知タイミング(分前): " + notifyBeforeList);
-    }
+        // notify-before
+        notifyMinutes.addAll(getConfig().getIntegerList("notify-before"));
 
-    private void startRestartScheduler() {
-        if (restartTask != null) restartTask.cancel();
+        // scheduled-commands
+        ConfigurationSection sec = getConfig().getConfigurationSection("scheduled-commands");
+        if (sec != null) {
+            for (String key : sec.getKeys(false)) {
+                String timeStr = sec.getString(key + ".time");
+                String command = sec.getString(key + ".command");
 
-        restartTask = new BukkitRunnable() {
-            private final Set<Integer> notifiedMinutes = new HashSet<>();
-
-            @Override
-            public void run() {
-                LocalTime now = LocalTime.now();
-                long secondsUntilRestart = java.time.Duration.between(now, restartTime).getSeconds();
-
-                // 翌日補正
-                if (secondsUntilRestart < 0) {
-                    secondsUntilRestart += 24 * 60 * 60;
-                }
-
-                // 通知処理（分前）
-                for (int minutesBefore : notifyBeforeList) {
-                    long targetSeconds = minutesBefore * 60L;
-                    if (secondsUntilRestart <= targetSeconds && !notifiedMinutes.contains(minutesBefore)) {
-                        String msg = "§e[AutoRestart] §fサーバーは §c" + minutesBefore + "分後§fに再起動します。";
-                        Bukkit.broadcastMessage(msg);
-                        getLogger().info("[AutoRestart] " + minutesBefore + "分前通知を送信しました。");
-                        notifiedMinutes.add(minutesBefore);
-                    }
-                }
-
-                // カウントダウン開始（60秒未満で一度だけ）
-                if (secondsUntilRestart <= 60 && countdownTask == null) {
-                    startCountdown();
-                }
-
-                // 再起動処理
-                if (secondsUntilRestart <= 0) {
-                    Bukkit.broadcastMessage("§c[AutoRestart] サーバーを再起動します！");
-                    cancel();
-                    Bukkit.shutdown();
+                try {
+                    LocalTime time = LocalTime.parse(timeStr, formatter);
+                    scheduledCommands.computeIfAbsent(time, k -> new ArrayList<>()).add(command);
+                } catch (Exception e) {
+                    getLogger().warning("Invalid scheduled command time: " + timeStr);
                 }
             }
-        };
+        }
 
-        // 1秒ごとにチェック
-        restartTask.runTaskTimer(this, 20L, 20L);
+        executedCommandsToday.clear();
     }
 
-    private void startCountdown() {
-        countdownTask = new BukkitRunnable() {
-            int seconds = 60;
+    private void startScheduler() {
+        if (running) return;
+        running = true;
 
-            @Override
-            public void run() {
-                if (seconds == 60 || seconds == 30 || seconds == 10) {
-                    getLogger().info("[AutoRestart] サーバーは " + seconds + "秒後に再起動します。");
-                }
-                if (seconds <= 0) {
-                    cancel();
-                }
-                seconds--;
+        Bukkit.getScheduler().runTaskTimer(this, () -> {
+            LocalTime now = LocalTime.now().withSecond(0).withNano(0);
+
+            // 毎日00:00でコマンド実行済みフラグをリセット
+            if (now.equals(LocalTime.MIDNIGHT)) {
+                executedCommandsToday.clear();
             }
-        };
-        countdownTask.runTaskTimer(this, 0L, 20L);
+
+            checkRestartNotifications(now);
+            checkScheduledCommands(now);
+
+        }, 20L, 20L); // 1秒に1回実行
+    }
+
+    private void checkScheduledCommands(LocalTime now) {
+        List<String> commands = scheduledCommands.get(now);
+        if (commands == null) return;
+
+        String key = now.toString();
+        if (executedCommandsToday.contains(key)) return;
+
+        executedCommandsToday.add(key);
+
+        for (String cmd : commands) {
+            getLogger().info("[AutoRestart] " + now + " コマンド実行: " + cmd);
+            Bukkit.dispatchCommand(Bukkit.getConsoleSender(), cmd);
+        }
+    }
+
+    private void checkRestartNotifications(LocalTime now) {
+        for (LocalTime rt : restartTimes) {
+
+            long diffSeconds = java.time.Duration.between(now, rt).getSeconds();
+
+            // --- notify-before（分前の全体通知） ---
+            if (notifyMinutes.contains((int)(diffSeconds / 60))) {
+                Bukkit.broadcastMessage(ChatColor.GOLD
+                        + "[AutoRestart] サーバーは " + (diffSeconds / 60) + "分後 に再起動します。");
+            }
+
+            // --- 固定の秒前通知（コンソール出力） ---
+            if (diffSeconds == 60 || diffSeconds == 30 || diffSeconds == 10) {
+                getLogger().info("Restart in " + diffSeconds + " seconds.");
+            }
+
+            // --- 再起動実行 ---
+            if (diffSeconds == 0) {
+                getLogger().info("Restart time reached. Restarting...");
+                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "restart");
+            }
+        }
     }
 
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
-        if (!cmd.getName().equalsIgnoreCase("autorestart")) return false;
 
-        if (args.length == 1 && args[0].equalsIgnoreCase("reload")) {
-            loadSettings();
-            if (restartTask != null) restartTask.cancel();
-            if (countdownTask != null) countdownTask.cancel();
-            startRestartScheduler();
+        if (cmd.getName().equalsIgnoreCase("autorestart")) {
 
-            sender.sendMessage("§a[AutoRestart] 設定をリロードしました。");
-            sender.sendMessage("§7次回再起動時刻: §b" + restartTime);
-            sender.sendMessage("§7通知タイミング(分前): §b" + notifyBeforeList);
+            if (args.length == 1 && args[0].equalsIgnoreCase("reload")) {
+                loadSettings();
+                sender.sendMessage(ChatColor.GREEN + "[AutoRestart] 設定をリロードしました。");
+
+                sender.sendMessage(ChatColor.GREEN + "次回の再起動時刻:");
+                restartTimes.forEach(t -> sender.sendMessage(" - " + t));
+
+                return true;
+            }
+
+            sender.sendMessage(ChatColor.YELLOW + "/autorestart reload - 設定をリロードします");
             return true;
         }
 
-        sender.sendMessage("§e/autorestart reload §7- 設定をリロードします。");
-        return true;
+        return false;
     }
 }
