@@ -1,18 +1,18 @@
-#すべて24時間制
-# 再起動時刻（複数設定可能）
+# 再起動時刻（秒まで指定可能）
 restart-times:
-  - "04:00"
+  - "04:00:00"
+  - "20:15:30"
 
-# 何分前に通知するか
+# 何秒前に通知するか
 notify-before:
-  - 5
-  - 1
+  - 300
+  - 60
 
-# 時刻指定コマンド実行
+# 指定時刻にコマンドを実行する
 scheduled-commands:
-  command1:
-    time: "03:30"
-    command: ""
-  command2:
-    time: "05:00"
-    command: ""
+  task1:
+    time: "03:40:10"
+    command: "say 自動タスク実行"
+  task2:
+    time: "05:00:00"
+    command: "say haro-"
