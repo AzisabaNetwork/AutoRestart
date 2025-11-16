@@ -1,5 +1,5 @@
 # AutoRestart
-**Version:** 1.2.0<br>
+**Version:** 1.2.1<br>
 **Native Minecraft Version:** 1.16.5<br>
 **Author:** pino223<br>
 **LICENSE:** [GPL-3.0](LICENSE)<br>
