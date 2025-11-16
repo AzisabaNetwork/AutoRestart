@@ -99,7 +99,7 @@ public class AutoRestart extends JavaPlugin {
         executedCommandsToday.add(key);
 
         for (String cmd : commands) {
-            getLogger().info("[AutoRestart] " + now + " コマンド実行: " + cmd);
+            getLogger().info(now + " コマンド実行: " + cmd);
             Bukkit.dispatchCommand(Bukkit.getConsoleSender(), cmd);
         }
     }
